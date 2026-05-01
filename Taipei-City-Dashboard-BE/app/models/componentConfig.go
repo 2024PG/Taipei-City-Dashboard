@@ -115,10 +115,10 @@ type QuertChartAndConponentForQdrant struct {
 
 // AIComponentInfo is a lightweight struct for AI system prompt usage
 type AIComponentInfo struct {
-	Index string `gorm:"column:index" json:"index"`
-	Name  string `gorm:"column:name"  json:"name"`
-	City  string `gorm:"column:city"  json:"city"`
-	Unit  string `gorm:"column:unit"  json:"unit"`
+	Index     string `gorm:"column:index"      json:"index"`
+	Name      string `gorm:"column:name"       json:"name"`
+	ShortDesc string `gorm:"column:short_desc" json:"short_desc"`
+	LongDesc  string `gorm:"column:long_desc"  json:"long_desc"`
 }
 
 // ComponentQueryInfo bundles query config and unit for tool use
@@ -130,12 +130,13 @@ type ComponentQueryInfo struct {
 
 /* ----- Handlers ----- */
 
-// GetAllComponentsForAI returns index + name from components table for AI name-based selection
+// GetAllComponentsForAI returns index, name, short_desc, long_desc for AI component selection
 func GetAllComponentsForAI() ([]AIComponentInfo, error) {
 	var results []AIComponentInfo
-	err := DBManager.Table("components").
-		Select("index, name").
-		Order("index").
+	err := DBManager.Table("components c").
+		Select("DISTINCT ON (c.index) c.index, c.name, COALESCE(qc.short_desc, '') as short_desc, COALESCE(qc.long_desc, '') as long_desc").
+		Joins("LEFT JOIN query_charts qc ON c.index = qc.index").
+		Order("c.index").
 		Find(&results).Error
 	return results, err
 }

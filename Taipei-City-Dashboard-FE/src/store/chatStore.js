@@ -15,22 +15,34 @@ export const useChatStore = defineStore("chat", () => {
 	];
 
 	const recommendComponents = ref(null);
-	const componentListText = ref("");
+	const componentListCache = ref([]);
 
 	// 載入組件清單（只抓一次，快取在 store 內）
 	const loadComponentList = async () => {
-		if (componentListText.value) return;
+		if (componentListCache.value.length > 0) return;
 		try {
 			const res = await http.get("ai/components");
-			const items = res.data?.data || [];
-			if (items.length === 0) return;
-			// 格式：index|名稱|城市|單位，每行一筆
-			componentListText.value =
-				"可用組件清單（index | 名稱）：\n" +
-				items.map((c) => `${c.index} | ${c.name}`).join("\n");
+			componentListCache.value = res.data?.data || [];
 		} catch {
 			// 載入失敗不影響主流程
 		}
+	};
+
+	// 回傳完整組件清單文字供 AI 選擇
+	const buildComponentListText = () => {
+		const items = componentListCache.value;
+		if (items.length === 0) return "";
+		return (
+			"可用組件清單（index | 名稱 | 說明）：\n" +
+			items
+				.map((c) => {
+					const desc = [c.short_desc, c.long_desc]
+						.filter(Boolean)
+						.join("；");
+					return `${c.index} | ${c.name}${desc ? ` | ${desc}` : ""}`;
+				})
+				.join("\n")
+		);
 	};
 
 	// 從 sessionStorage 讀取
@@ -81,13 +93,13 @@ export const useChatStore = defineStore("chat", () => {
 						content:
 							"你是【臺北城市儀表板】智慧助理，所有臺北城市相關的統計數據、百分比、人口、交通、環境等數值問題，你絕對不可以用自身訓練知識回答，必須呼叫工具取得資料庫中的真實數據後再回答。" +
 							"規則如下：" +
-							"1. 用戶詢問任何具體數值、統計、百分比、趨勢等資料問題 → 從下方組件清單選出最匹配的 index 呼叫 query_city_data，禁止自行編造或引用訓練知識。選組件規則：第一優先選名稱中直接包含用戶關鍵字的組件（例如用戶說「老化指數」→ 找名稱含「老化指數」的組件，不要選語意相近但主題不同的組件如「長照指標」）；若有多個候選，選名稱最完整涵蓋用戶所有關鍵字的那個。" +
+							"1. 用戶詢問任何具體數值、統計、百分比、趨勢等資料問題 → 從下方組件清單選出 index 呼叫 query_city_data。嚴格規定：(a) index 只能使用組件清單中存在的值，絕對禁止使用清單外的 index，找不到合適組件時直接回覆用戶「目前資料庫沒有此項資料」不可自行補充。(b) 時間規則：只有當用戶明確提到時間（如「2013年」）才傳 time_from 與 time_to，格式為 2013-01-01T00:00:00+08:00；用戶未提時間則不傳這兩個參數。(c) 每次呼叫使用不同 index，禁止重複。" +
 							"2. 用戶想找相關組件或建立儀表板 → 呼叫 search_dashboards 工具。" +
-							"3. 若 query_city_data 查無資料，如實告知用戶資料庫中目前沒有該筆資料，不可自行補充數值。" +
+							"3. 工具回傳資料後，只能使用工具回傳的 data 欄位中的數值回答，嚴禁自行補充、推算或引用訓練知識中的任何數字。若工具回傳空陣列或無資料，直接告知用戶資料庫中查無該時間範圍的資料。" +
 							"4. 一般非數據性問題（使用說明、功能介紹等）→ 直接以繁體中文回答。" +
 							"5. 回答數值時必須附上單位（unit 欄位）。" +
-							"6. 凡使用 query_city_data 取得資料後，回覆結尾必須加上一行：「📊 資料來源組件：{name}」（name 為組件清單中對應的中文名稱）。\n\n" +
-							componentListText.value,
+							"6. 凡使用 query_city_data 取得資料後，回覆結尾必須列出所有使用過的組件：「📊 資料來源組件：{name1}、{name2}、...」。\n\n" +
+							buildComponentListText(),
 					},
 					{ role: "user", content: userText },
 				],
@@ -117,13 +129,14 @@ export const useChatStore = defineStore("chat", () => {
 						function: {
 							name: "query_city_data",
 							description:
-								"自動搜尋組件並取得實際數據，用於回答具體數值問題（例如：目前空氣品質、交通流量、停車資訊等），一次呼叫即可完成",
+								"依組件 index 從資料庫取得實際數據。index 必須從上方組件清單中選取，不可自行填寫或猜測。詢問歷史資料時必須傳入 time_from 與 time_to。",
 							parameters: {
 								type: "object",
 								properties: {
-									query: {
+									index: {
 										type: "string",
-										description: "查詢的主題或關鍵字",
+										description:
+											"組件的 index，必須從系統提供的組件清單中選取",
 									},
 									city: {
 										type: "string",
@@ -141,7 +154,7 @@ export const useChatStore = defineStore("chat", () => {
 											"查詢結束時間，格式 2006-01-02T15:04:05+08:00，不填則為現在",
 									},
 								},
-								required: ["query"],
+								required: ["index"],
 							},
 						},
 					},
@@ -151,6 +164,30 @@ export const useChatStore = defineStore("chat", () => {
 			const data = response.data?.data;
 			const aiAnswer = data?.content || "";
 			const componentResultsRaw = data?.component_results;
+			// const toolCallsLogRaw = data?.tool_calls_log;
+
+			// 顯示工具呼叫 log（除錯用，需要時取消註解）
+			// if (toolCallsLogRaw) {
+			// 	try {
+			// 		const calls = JSON.parse(toolCallsLogRaw);
+			// 		const logLines = calls.map((c) => {
+			// 			const args = JSON.parse(c.args || "{}");
+			// 			const detail = Object.entries(args)
+			// 				.map(([k, v]) => `${k}=${v}`)
+			// 				.join(", ");
+			// 			return `🔧 ${c.tool}(${detail})`;
+			// 		});
+			// 		chatData.value.push({
+			// 			id: chatData.value.length + 1,
+			// 			role: "bot",
+			// 			isDefault: false,
+			// 			isDebug: true,
+			// 			content: logLines.join("\n"),
+			// 		});
+			// 	} catch {
+			// 		// 解析失敗不影響主流程
+			// 	}
+			// }
 
 			const targetMsg = chatData.value.find((msg) => msg.id === botMsgId);
 			if (!targetMsg) return;

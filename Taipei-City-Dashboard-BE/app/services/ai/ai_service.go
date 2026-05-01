@@ -63,7 +63,7 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 	}
 
 	// 2. Main Tool Calling Loop
-	maxToolLoops := 5
+	maxToolLoops := 2
 	
 	// Extract Tools list for system message and error reporting
 	availableTools := ""
@@ -111,6 +111,11 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 	var toolUsed bool
 	var componentResults string
 	usedToolNamesSet := make(map[string]struct{})
+	type toolCallEntry struct {
+		Tool string `json:"tool"`
+		Args string `json:"args"`
+	}
+	toolCallsLog := make([]toolCallEntry, 0)
 
 	for loop := 0; loop < maxToolLoops; loop++ {
 		// A. Heartbeat: Send an SSE comment to keep connection alive before LLM starts
@@ -184,6 +189,10 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 
 			// B. Execute tool with whitelist check
 			result, err := tools.Execute(ctx, tc.FunctionCall.Name, tc.FunctionCall.Arguments)
+			toolCallsLog = append(toolCallsLog, toolCallEntry{
+				Tool: tc.FunctionCall.Name,
+				Args: tc.FunctionCall.Arguments,
+			})
 			if err == nil {
 				usedToolNamesSet[tc.FunctionCall.Name] = struct{}{}
 				if tc.FunctionCall.Name == "search_dashboards" {
@@ -266,6 +275,11 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 			}
 		}
 		chatLog.ComponentResults = componentResults
+		if len(toolCallsLog) > 0 {
+			if logBytes, err := json.Marshal(toolCallsLog); err == nil {
+				chatLog.ToolCallsLog = string(logBytes)
+			}
+		}
 	}
 
 	// 5. Persist Log

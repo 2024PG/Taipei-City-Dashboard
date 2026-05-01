@@ -210,15 +210,28 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("取得資料失敗: %v", err)
 	}
 
-	result := map[string]interface{}{
-		"index":      targetIndex,
-		"name":       componentName,
-		"unit":       info.Unit,
-		"query_type": info.QueryType,
-		"data":       chartData,
+	// 將資料序列化為 JSON 字串以便格式化
+	dataBytes, _ := json.Marshal(chartData)
+	dataStr := string(dataBytes)
+	if dataStr == "null" || dataStr == "[]" || dataStr == "{}" || dataStr == `[{}]` {
+		return fmt.Sprintf(
+			"【資料庫查詢結果】組件：%s（%s）\n查詢時間：%s ~ %s\n結果：查無資料，請直接告知用戶此時間範圍內沒有資料，不可補充任何數值。",
+			targetIndex, params.City, params.TimeFrom, params.TimeTo,
+		), nil
 	}
-	resultBytes, _ := json.Marshal(result)
-	return string(resultBytes), nil
+
+	unit := info.Unit
+	if unit == "" {
+		unit = "（無單位）"
+	}
+	name := componentName
+	if name == "" {
+		name = targetIndex
+	}
+	return fmt.Sprintf(
+		"【資料庫查詢結果 - 僅能使用以下數值回答，嚴禁引用訓練知識】\n組件：%s（%s）\n單位：%s\n查詢時間：%s ~ %s\n數據：%s",
+		name, params.City, unit, params.TimeFrom, params.TimeTo, dataStr,
+	), nil
 }
 
 func parseArgs(args string, v interface{}) error {
