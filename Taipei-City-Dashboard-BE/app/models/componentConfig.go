@@ -141,16 +141,36 @@ func GetAllComponentsForAI() ([]AIComponentInfo, error) {
 	return results, err
 }
 
-// GetComponentQueryInfoByIndex fetches query config and unit together
+// GetComponentQueryInfoByIndex fetches query config and unit with separate queries
+// to avoid column name conflict between query_charts.index and component_charts.index
 func GetComponentQueryInfoByIndex(index string, city string) (ComponentQueryInfo, error) {
 	var info ComponentQueryInfo
-	err := DBManager.Table("query_charts qc").
-		Select("qc.query_type, qc.query_chart, COALESCE(cc.unit, '') as unit").
-		Joins("LEFT JOIN component_charts cc ON qc.index = cc.index").
-		Where("qc.index = ?", index).
-		Where("qc.city = ?", city).
-		Find(&info).Error
-	return info, err
+
+	// 1. 取 query_charts 的 query_type 和 query_chart
+	type queryConfig struct {
+		QueryType  string `gorm:"column:query_type"`
+		QueryChart string `gorm:"column:query_chart"`
+	}
+	var config queryConfig
+	if err := DBManager.Table("query_charts").
+		Select("query_type, query_chart").
+		Where("index = ?", index).
+		Where("city = ?", city).
+		Find(&config).Error; err != nil {
+		return info, err
+	}
+	info.QueryType = config.QueryType
+	info.QueryChart = config.QueryChart
+
+	// 2. 另外從 component_charts 取 unit
+	var chart ComponentChart
+	DBManager.Table("component_charts").
+		Select("unit").
+		Where("index = ?", index).
+		Find(&chart)
+	info.Unit = chart.Unit
+
+	return info, nil
 }
 
 // GetPublicComponentsForQdrant fetches all query_charts and components that are part of a public (non-personal) dashboard.
