@@ -29,6 +29,7 @@ import IconPercentChart from "./components/IconPercentChart.vue";
 import IndicatorChart from "./components/IndicatorChart.vue";
 import TextUnitChart from "./components/TextUnitChart.vue";
 import CascadeBarChart from "./components/CascadeBarChart.vue";
+import CascadeTimelineChart from "./components/CascadeTimelineChart.vue";
 
 import MapLegendSvg from "./assets/chart/MapLegend.svg";
 import DistrictChartSvg from "./assets/chart/DistrictChart.svg";
@@ -92,7 +93,16 @@ const emits = defineEmits([
 	"changeCity"
 ]);
 
-const activeChart = ref(props.config.chart_config.types[0]);
+const componentChartTypes = computed(() => {
+	if (props.config.chart_config.types?.length) {
+		return props.config.chart_config.types;
+	}
+	return props.config.query_type ? [props.config.query_type] : [];
+});
+const showCitySelect = computed(
+	() => props.selectBtn && !props.selectBtnDisabled && !componentChartTypes.value.includes("CascadeTimelineChart")
+);
+const activeChart = ref(componentChartTypes.value[0]);
 const activeCity = computed({
 	get: () => props.activeCity,
 	set: (value) => {
@@ -225,6 +235,8 @@ function returnChartComponent(name, svg) {
 		return svg ? TextUnitChartSvg : TextUnitChart;
 	case "CascadeBarChart":
 		return svg ? BarChartSvg : CascadeBarChart;
+	case "CascadeTimelineChart":
+		return svg ? TimelineSeparateChartSvg : CascadeTimelineChart;
 	default:
 		return svg ? MapLegendSvg : MapLegend;
 	}
@@ -347,7 +359,7 @@ function returnChartComponent(name, svg) {
       class="dashboardcomponent-control"
     >
       <select
-        v-if="selectBtn && !selectBtnDisabled"
+        v-if="showCitySelect"
         v-model="activeCity"
         name="city"
         class="selectBtn"
@@ -363,11 +375,11 @@ function returnChartComponent(name, svg) {
         </template>
       </select>
       <div
-        v-if="config.chart_config.types.length > 1 && !config.chart_config.types.includes('CascadeBarChart')"
+        v-if="componentChartTypes.length > 1 && !componentChartTypes.includes('CascadeBarChart')"
         class="dashboardcomponent-control-group"
       >
         <button
-          v-for="item in config.chart_config.types"
+          v-for="item in componentChartTypes"
           :key="`${config.index}-${item}-button`"
           :class="{
             'dashboardcomponent-control-group-button': true,
@@ -406,7 +418,7 @@ function returnChartComponent(name, svg) {
       </div>
       <div class="preview-content-charts">
         <img
-          v-for="chart in props.config.chart_config.types"
+          v-for="chart in componentChartTypes"
           :key="`${props.config.index} - ${chart}`"
           :src="returnChartComponent(chart, true).toString()"
         >
@@ -423,7 +435,7 @@ function returnChartComponent(name, svg) {
     >
       <component
         :is="returnChartComponent(item)"
-        v-for="item in config.chart_config.types"
+        v-for="item in componentChartTypes"
         :key="`${props.config.index}-${item}-chart-${item.city}`"
         :active-chart="activeChart"
         :active-city="activeCity"

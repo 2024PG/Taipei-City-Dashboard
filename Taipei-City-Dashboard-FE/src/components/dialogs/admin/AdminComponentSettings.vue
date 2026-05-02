@@ -327,6 +327,9 @@ function handleClose() {
               <option value="time">
                 時間序列資料
               </option>
+              <option value="CascadeTimelineChart">
+                連動篩選時間序列資料
+              </option>
               <option value="percent">
                 百分比資料
               </option>
