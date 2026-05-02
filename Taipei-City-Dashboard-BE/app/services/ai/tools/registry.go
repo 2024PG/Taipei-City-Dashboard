@@ -196,9 +196,30 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 		chartData, err = models.GetTwoDimensionalData(&info.QueryChart, params.TimeFrom, params.TimeTo)
 	case "three_d", "percent":
 		var categories []string
-		var data interface{}
-		data, categories, err = models.GetThreeDimensionalData(&info.QueryChart, params.TimeFrom, params.TimeTo)
-		chartData = map[string]interface{}{"data": data, "categories": categories}
+		var seriesData []models.ThreeDimensionalDataOutput
+		seriesData, categories, err = models.GetThreeDimensionalData(&info.QueryChart, params.TimeFrom, params.TimeTo)
+
+		// 預先計算各 category（x_axis，如行政區）的所有 series 加總
+		// 避免 AI 只取單一格數值而非加總後的總量
+		type categoryTotal struct {
+			Category string `json:"category"`
+			Total    int    `json:"total"`
+		}
+		totals := make([]categoryTotal, 0, len(categories))
+		for j, cat := range categories {
+			total := 0
+			for _, series := range seriesData {
+				if j < len(series.Data) {
+					total += series.Data[j]
+				}
+			}
+			totals = append(totals, categoryTotal{Category: cat, Total: total})
+		}
+		chartData = map[string]interface{}{
+			"data":            seriesData,
+			"categories":      categories,
+			"category_totals": totals,
+		}
 	case "time":
 		chartData, err = models.GetTimeSeriesData(&info.QueryChart, params.TimeFrom, params.TimeTo)
 	case "map_legend":
@@ -228,9 +249,24 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 	if name == "" {
 		name = targetIndex
 	}
+
+	// 依資料型別加入解讀提示，避免 AI 誤讀矩陣結構
+	var dataHint string
+	switch info.QueryType {
+	case "three_d", "percent":
+		dataHint = "\n資料結構說明：此為三維圖資料，data 是多個 series 的矩陣，categories 為 X 軸標籤（如年齡層）。" +
+			"【重要】資料中已附上 category_totals 欄位，這是各 category（如行政區）所有 series 加總後的結果。" +
+			"若要比較哪個行政區（或類別）總量最大，必須使用 category_totals 欄位，找出 total 最大的項目，" +
+			"不可直接取 data 中的單一數值作為總量。單位（unit）適用於 category_totals 中的每個 total 值，回答時必須附上單位。"
+	case "two_d":
+		dataHint = "\n資料結構說明：此為一維陣列，每筆資料含 x（類別）與 y（數值）欄位，單位為：" + unit + "。回答時必須附上單位。"
+	case "time":
+		dataHint = "\n資料結構說明：此為時間序列，每筆資料含時間戳與數值，單位為：" + unit + "。回答時必須附上單位。"
+	}
+
 	return fmt.Sprintf(
-		"【資料庫查詢結果 - 僅能使用以下數值回答，嚴禁引用訓練知識】\n組件：%s（%s）\n單位：%s\n查詢時間：%s ~ %s\n數據：%s",
-		name, params.City, unit, params.TimeFrom, params.TimeTo, dataStr,
+		"【資料庫查詢結果 - 僅能使用以下數值回答，嚴禁引用訓練知識】\n組件：%s（%s）\n單位：%s（回答時必須附上此單位）\n查詢時間：%s ~ %s%s\n數據：%s",
+		name, params.City, unit, params.TimeFrom, params.TimeTo, dataHint, dataStr,
 	), nil
 }
 
