@@ -1,7 +1,7 @@
 <!-- Developed by Taipei Urban Intelligence Center 2023-2024-->
 
 <script setup>
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 // import { MapConfig, MapFilter } from "../utilities/componentConfig";
 import VueApexCharts from "vue3-apexcharts";
 
@@ -16,7 +16,9 @@ const props = defineProps(["chart_config", "activeChart", "series"]);
 // ]);
 
 // 原始資料拷貝避免更改原始資料
-const localSeries = ref(JSON.parse(JSON.stringify(props.series)));
+const safeSeries = computed(() => props.series || []);
+const chartColors = computed(() => props.chart_config?.color || []);
+const localSeries = ref(JSON.parse(JSON.stringify(safeSeries.value)));
 
 const chartOptions = ref({
 	chart: {
@@ -27,7 +29,7 @@ const chartOptions = ref({
 			},
 		},
 	},
-	colors: [...props.chart_config.color],
+	colors: [...chartColors.value],
 	dataLabels: {
 		enabled: false,
 	},
@@ -35,7 +37,7 @@ const chartOptions = ref({
 		show: false,
 	},
 	legend: {
-		show: props.series.length > 1 ? true : false,
+		show: safeSeries.value.length > 1 ? true : false,
 	},
 	markers: {
 		hover: {
@@ -45,7 +47,7 @@ const chartOptions = ref({
 		strokeWidth: 0,
 	},
 	stroke: {
-		colors: [...props.chart_config.color],
+		colors: [...chartColors.value],
 		curve: "smooth",
 		show: true,
 		width: 2,
@@ -68,7 +70,7 @@ const chartOptions = ref({
 				"</h6>" +
 				"<span>" +
 				series[seriesIndex][dataPointIndex] +
-				` ${props.chart_config.unit}` +
+				` ${props.chart_config?.unit || ""}` +
 				"</span>" +
 				"</div>"
 			);
@@ -100,13 +102,25 @@ const chartOptions = ref({
 
 
 function parseTime(time) {
-	return time.replace("T", " ").replace("+08:00", " ");
+	return String(time).replace("T", " ").replace("+08:00", " ");
 }
 
 watch(
 	() => props.series,
 	(newVal) => {
 		localSeries.value = JSON.parse(JSON.stringify(newVal || []));
+		chartOptions.value = {
+			...chartOptions.value,
+			colors: [...chartColors.value],
+			legend: {
+				...chartOptions.value.legend,
+				show: safeSeries.value.length > 1,
+			},
+			stroke: {
+				...chartOptions.value.stroke,
+				colors: [...chartColors.value],
+			},
+		};
 
 		const timestamps = newVal?.[0]?.data?.map((p) => new Date(p.x).getTime()) || [];
 		if (timestamps.length < 2) return;
@@ -156,4 +170,3 @@ watch(
     />
   </div>
 </template>
-
