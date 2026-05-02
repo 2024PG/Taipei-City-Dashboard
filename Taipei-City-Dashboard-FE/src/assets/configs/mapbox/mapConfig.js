@@ -40,6 +40,7 @@ export const mapTypes = {
 	voronoi: "泰森多邊形",
 	isoline: "等高線圖",
 	"symbol-3d": "三維捷運動態地圖",
+	heatmap: "熱力圖",
 };
 
 // Styles for base layer "Taipei Town"
@@ -378,6 +379,55 @@ export const maplayerCommonPaint = {
 		"line-dasharray": [2, 4],
 	},
 	symbol: {},
+	heatmap: {
+		"heatmap-weight": 1,
+		"heatmap-intensity": [
+			"interpolate",
+			["linear"],
+			["zoom"],
+			11,
+			1,
+			15,
+			3,
+		],
+		"heatmap-color": [
+			"interpolate",
+			["linear"],
+			["heatmap-density"],
+			0,
+			"rgba(0,0,0,0)",
+			0.1,
+			"rgba(220,255,210,0.2)",
+			0.3,
+			"rgba(150,230,80,0.75)",
+			0.6,
+			"rgba(50,180,30,0.9)",
+			0.85,
+			"rgba(0,100,10,0.95)",
+			1,
+			"rgba(0,50,0,1)",
+		],
+		"heatmap-radius": [
+			"interpolate",
+			["linear"],
+			["zoom"],
+			11,
+			15,
+			13,
+			25,
+			15,
+			40,
+		],
+		"heatmap-opacity": [
+			"interpolate",
+			["linear"],
+			["zoom"],
+			11,
+			0.5,
+			15,
+			0.35,
+		],
+	},
 };
 
 // Layout Properties
@@ -389,6 +439,7 @@ export const maplayerCommonLayout = {
 	fill: {},
 	"fill-extrusion": {},
 	circle: {},
+	heatmap: {},
 	symbol: {
 		"icon-allow-overlap": true,
 		"icon-ignore-placement": true,

@@ -359,7 +359,8 @@ function returnChartComponent(name, svg) {
       class="dashboardcomponent-control"
     >
       <select
-        v-if="showCitySelect"
+        v-if="showCitySelect && selectBtn && !selectBtnDisabled && !config.chart_config.types.includes('CascadeBarChart')"
+
         v-model="activeCity"
         name="city"
         class="selectBtn"
