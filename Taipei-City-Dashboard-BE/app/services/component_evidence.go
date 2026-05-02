@@ -18,8 +18,8 @@ import (
 const (
 	defaultEvidenceTopK           = 5
 	maxEvidenceTopK               = 8
-	defaultEvidenceScoreThreshold = 0.75
-	maxEvidenceArrayItems         = 30
+	defaultEvidenceScoreThreshold = 0.82
+	maxEvidenceArrayItems         = 300
 )
 
 var (
@@ -105,6 +105,7 @@ func BuildComponentEvidencePack(ctx context.Context, query ComponentEvidenceQuer
 			"Use only values present in components[].data.",
 			"Do not invent, estimate, or infer missing numeric values.",
 			"Do not generate SQL or ask for table and column names.",
+			"CRITICAL: If components[].truncated is true, the data array is incomplete. You MUST NOT compute totals, city-wide sums, rankings, or averages from truncated data. Instead, explicitly state that the data is truncated and the result cannot be reliably computed.",
 			"Every numeric value must include the component unit from components[].unit; if unit is empty or missing, write 單位未提供.",
 			"Answer with 2-3 summary sentences, key indicators with units, comparative analysis, decision-support suggestions, and data limitations.",
 			"Suggestions must be framed as decision support, not final policy conclusions.",
