@@ -73,6 +73,8 @@ func FetchComponentChartDataByIndexAndTime(index string, city string, timeFrom s
 		result.Data = map[string]interface{}{"data": data, "categories": categories}
 	case "time":
 		result.Data, fetchErr = models.GetTimeSeriesData(&info.QueryChart, timeFrom, timeTo)
+	case "CascadeTimelineChart":
+		result.Data, fetchErr = models.GetCascadeTimelineData(&info.QueryChart, timeFrom, timeTo)
 	case "map_legend":
 		result.Data, fetchErr = models.GetMapLegendData(&info.QueryChart, timeFrom, timeTo)
 	default:

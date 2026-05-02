@@ -45,6 +45,7 @@ export const useContentStore = defineStore("content", {
 			icon: null,
 			city: null,
 		},
+		activeComponentContext: null,
 		// Stores information of the current dashboard duplicated id data
 		currentDashboardExcluded: {
 			components: null,
@@ -80,6 +81,26 @@ export const useContentStore = defineStore("content", {
 	actions: {
 		setComponentData(index, component) {
 			this.currentDashboard.components[index] = component;
+			this.setActiveComponentContext(component);
+		},
+		setActiveComponentContext(component) {
+			if (!component) return;
+			this.activeComponentContext = {
+				id: component.id,
+				index: component.index,
+				name: component.name,
+				city: component.city,
+				query_type: component.query_type,
+				time_from: component.time_from,
+				time_to: component.time_to,
+				active_chart:
+					component.chart_config?.types?.[0] || component.query_type || null,
+				chart_config: {
+					types: component.chart_config?.types || [],
+					unit: component.chart_config?.unit || component.unit || "",
+					categories: component.chart_config?.categories || [],
+				},
+			};
 		},
 		setMapLayerData(index, component) {
 			this.mapLayers[index] = component;
@@ -671,6 +692,7 @@ export const useContentStore = defineStore("content", {
 				this.loading = false;
 				return;
 			}
+			this.setActiveComponentContext(this.currentDashboard.components?.[0]);
 			if (
 				this.currentDashboard.mode === "/mapview" &&
 				!this.currentDashboard.index?.includes("map-layers")

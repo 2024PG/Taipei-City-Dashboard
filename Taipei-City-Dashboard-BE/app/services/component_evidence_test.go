@@ -27,6 +27,108 @@ func TestBuildComponentEvidencePackNoQdrantHits(t *testing.T) {
 	}
 }
 
+func TestBuildComponentEvidencePackUsesPreferredComponentWhenQdrantMisses(t *testing.T) {
+	restore := stubEvidenceDependencies(
+		func(ctx context.Context, query string, limit int, scoreThreshold float32) ([]ComponentResult, error) {
+			return []ComponentResult{}, nil
+		},
+		func(index string, city string, timeFrom string, timeTo string) (ComponentChartDataResult, error) {
+			return ComponentChartDataResult{
+				Index:     index,
+				City:      city,
+				QueryType: "time",
+				Unit:      "度",
+				Data:      []map[string]interface{}{{"x": "2025-09-01T00:00:00+08:00", "y": 100}},
+			}, nil
+		},
+	)
+	defer restore()
+
+	pack, err := BuildComponentEvidencePack(context.Background(), ComponentEvidenceQuery{
+		UserQuestion: "2025年9月電力用多少度",
+		City:         "taipei",
+		PreferredComponent: &ComponentResult{
+			ID:    42,
+			Index: "power_usage",
+			Name:  "用電(度)量",
+			City:  "taipei",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildComponentEvidencePack returned error: %v", err)
+	}
+	if pack.Answerability.Status != "answerable" {
+		t.Fatalf("answerability status = %q, want answerable", pack.Answerability.Status)
+	}
+	if len(pack.Components) != 1 {
+		t.Fatalf("components len = %d, want 1", len(pack.Components))
+	}
+	if pack.Components[0].Name != "用電(度)量" {
+		t.Fatalf("component name = %q, want 用電(度)量", pack.Components[0].Name)
+	}
+	if pack.TimeRange.From != "2025-09-01T00:00:00+08:00" {
+		t.Fatalf("time from = %q, want 2025-09-01T00:00:00+08:00", pack.TimeRange.From)
+	}
+}
+
+func TestComponentContextToPreferredResultsMatchesElectricityDashboard(t *testing.T) {
+	results := ComponentContextToPreferredResults("2025年9月電力用多少度", map[string]interface{}{
+		"dashboard": map[string]interface{}{"name": "電力重生了"},
+		"components": []interface{}{
+			map[string]interface{}{"id": 1, "index": "electric_bus_ratio", "name": "電動巴士比例", "city": "taipei"},
+			map[string]interface{}{"id": 2, "index": "power_usage", "name": "用電(度)量", "city": "taipei"},
+		},
+	})
+	if len(results) == 0 {
+		t.Fatal("expected preferred component results")
+	}
+	if results[0].Name != "用電(度)量" {
+		t.Fatalf("top preferred component = %q, want 用電(度)量", results[0].Name)
+	}
+}
+
+func TestBuildComponentEvidencePackDoesNotIncludeUnrelatedQdrantWhenPreferredIsStrong(t *testing.T) {
+	restore := stubEvidenceDependencies(
+		func(ctx context.Context, query string, limit int, scoreThreshold float32) ([]ComponentResult, error) {
+			return []ComponentResult{
+				{ID: 3, Index: "ebus_percent", Name: "電動巴士比例", City: "taipei", Score: 0.93},
+				{ID: 4, Index: "bike_network", Name: "自行車道路統計資料", City: "taipei", Score: 0.90},
+			}, nil
+		},
+		func(index string, city string, timeFrom string, timeTo string) (ComponentChartDataResult, error) {
+			return ComponentChartDataResult{
+				Index:     index,
+				City:      city,
+				QueryType: "time",
+				Unit:      "度",
+				Data:      []map[string]interface{}{{"x": "2025-09-01T00:00:00+08:00", "y": 100}},
+			}, nil
+		},
+	)
+	defer restore()
+
+	pack, err := BuildComponentEvidencePack(context.Background(), ComponentEvidenceQuery{
+		UserQuestion: "2025年9月電力用多少度",
+		City:         "taipei",
+		PreferredComponents: []ComponentResult{
+			{ID: 2, Index: "power_usage", Name: "用電(度)量", City: "taipei", Score: 2.75},
+			{ID: 3, Index: "ebus_percent", Name: "電動巴士比例", City: "taipei", Score: 1.3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildComponentEvidencePack returned error: %v", err)
+	}
+	if len(pack.Components) != 1 {
+		t.Fatalf("components len = %d, want 1", len(pack.Components))
+	}
+	if pack.Components[0].Index != "power_usage" {
+		t.Fatalf("component index = %q, want power_usage", pack.Components[0].Index)
+	}
+	if pack.Retrieval.CandidateCount != 1 {
+		t.Fatalf("candidate count = %d, want 1", pack.Retrieval.CandidateCount)
+	}
+}
+
 func TestBuildComponentEvidencePackPartialWhenOneComponentFails(t *testing.T) {
 	restore := stubEvidenceDependencies(
 		func(ctx context.Context, query string, limit int, scoreThreshold float32) ([]ComponentResult, error) {

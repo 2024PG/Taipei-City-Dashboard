@@ -1,8 +1,10 @@
 import { ref, watch } from "vue";
 import { defineStore } from "pinia";
 import http from "../router/axios";
+import { useContentStore } from "./contentStore";
 
 export const useChatStore = defineStore("chat", () => {
+	const contentStore = useContentStore();
 	// 預設訊息
 	const defaultChatData = [
 		{
@@ -74,7 +76,45 @@ export const useChatStore = defineStore("chat", () => {
 		});
 
 		try {
+			const activeComponent =
+				contentStore.activeComponentContext ||
+				contentStore.currentDashboard.components?.[0] ||
+				null;
+			const componentContext = {
+				dashboard: {
+					index: contentStore.currentDashboard.index,
+					name: contentStore.currentDashboard.name,
+					city: contentStore.currentDashboard.city,
+					mode: contentStore.currentDashboard.mode,
+				},
+				active_component: activeComponent,
+				components: (contentStore.currentDashboard.components || []).map(
+					(component) => ({
+						id: component.id,
+						index: component.index,
+						name: component.name,
+						city: component.city,
+						query_type: component.query_type,
+						time_from: component.time_from,
+						time_to: component.time_to,
+						active_chart:
+							component.chart_config?.types?.[0] ||
+							component.query_type ||
+							null,
+						chart_config: {
+							types: component.chart_config?.types || [],
+							unit:
+								component.chart_config?.unit ||
+								component.unit ||
+								"",
+							categories:
+								component.chart_config?.categories || [],
+						},
+					})
+				),
+			};
 			const response = await http.post("ai/chat/twai", {
+				component_context: componentContext,
 				messages: [
 					{
 						role: "system",
@@ -96,6 +136,7 @@ export const useChatStore = defineStore("chat", () => {
 							"13. 建議只能作為決策參考，不能說成最終決策或政策結論；所有建議都要連回 evidence 中看到的資料差異。若 evidence 不足，只能建議後續需要補充哪些資料或進一步檢視哪些指標，不可以憑空建議加強宣傳、增加預算或調整政策。" +
 							"14. 對老化指數等 unit 空白或非百分比的指標，不可以自動加 %；若 evidence 沒有 unit，請寫「單位未提供」。可以用保守語句說明老化指數代表老年人口相對幼年人口的比例概念，但不能把它改寫成百分比。" +
 							"15. 凡使用 query_city_data 取得資料後，回覆結尾必須加上一行：「📊 資料來源組件：{name}」（name 為組件清單中對應的中文名稱）。凡使用 answer_city_data_question 取得 evidence 後，回覆結尾必須列出使用的 components 名稱。\n\n" +
+							"16. 如果 component_context.active_component 存在，使用者又正在詢問目前頁面、目前組件、該組件數值或時間資料，必須優先使用該 active component 的 index/city 呼叫工具，不可回答「使用的組件：無」。\n\n" +
 							componentListText.value,
 					},
 					{ role: "user", content: userText },

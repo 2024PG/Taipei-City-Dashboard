@@ -4,7 +4,9 @@ import (
 	"TaipeiCityDashboardBE/app/models"
 	"TaipeiCityDashboardBE/app/services/ai"
 	"TaipeiCityDashboardBE/app/util"
+	"TaipeiCityDashboardBE/logs"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/http"
@@ -15,9 +17,10 @@ import (
 
 // AIChatInput matches the Request Schema in specification。https://docs.twcloud.ai/docs/user-guides/twcc/afs/api-and-parameters/api-parameter-information#模型說明
 type AIChatInput struct {
-	SessionID string `json:"session"`
-	Stream    bool   `json:"stream"`
-	Messages  []struct {
+	SessionID        string                 `json:"session"`
+	Stream           bool                   `json:"stream"`
+	ComponentContext map[string]interface{} `json:"component_context,omitempty"`
+	Messages         []struct {
 		Role      string `json:"role" binding:"required,oneof=system user assistant tool"`
 		Content   string `json:"content" binding:"required"`
 		ToolCalls []struct {
@@ -30,13 +33,13 @@ type AIChatInput struct {
 		} `json:"tool_calls,omitempty"`
 		ToolCallID string `json:"tool_call_id,omitempty"`
 	} `json:"messages" binding:"required,gt=0"`
-	MaxNewTokens     *int      `json:"max_new_tokens" binding:"omitempty,gt=0"`
-	Temperature      *float64  `json:"temperature" binding:"omitempty,gt=0"`
-	TopP             *float64  `json:"top_p" binding:"omitempty,gt=0,lte=1"`
-	TopK             *int      `json:"top_k" binding:"omitempty,gte=1,lte=100"`
-	FrequencePenalty *float64  `json:"frequence_penalty" binding:"omitempty,gt=0"`
-	StopSequences    []string  `json:"stop_sequences" binding:"omitempty,max=4"`
-	Seed             *int      `json:"seed" binding:"omitempty,gte=0"`
+	MaxNewTokens     *int     `json:"max_new_tokens" binding:"omitempty,gt=0"`
+	Temperature      *float64 `json:"temperature" binding:"omitempty,gt=0"`
+	TopP             *float64 `json:"top_p" binding:"omitempty,gt=0,lte=1"`
+	TopK             *int     `json:"top_k" binding:"omitempty,gte=1,lte=100"`
+	FrequencePenalty *float64 `json:"frequence_penalty" binding:"omitempty,gt=0"`
+	StopSequences    []string `json:"stop_sequences" binding:"omitempty,max=4"`
+	Seed             *int     `json:"seed" binding:"omitempty,gte=0"`
 	Tools            []struct {
 		Type     string `json:"type" binding:"required,eq=function"`
 		Function struct {
@@ -63,11 +66,17 @@ func ChatWithTWCC(c *gin.Context) {
 	var input AIChatInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"status": "error",
+			"status":     "error",
 			"error_code": "INVALID_REQUEST",
-			"message": err.Error(),
+			"message":    err.Error(),
 		})
 		return
+	}
+	if raw, err := json.Marshal(input); err == nil {
+		logs.FInfo("AI chat request body: %s", string(raw))
+	}
+	if raw, err := json.Marshal(input.ComponentContext); err == nil {
+		logs.FInfo("AI chat component context: %s", string(raw))
 	}
 
 	// 1. Session ID Management
@@ -122,10 +131,11 @@ func ChatWithTWCC(c *gin.Context) {
 	ipAddress := c.ClientIP()
 
 	req := ai.AIChatRequest{
-		SessionID: sessionID,
-		UserID:    userID,
-		IPAddress: ipAddress,
-		Messages:  serviceMsgs,
+		SessionID:        sessionID,
+		UserID:           userID,
+		IPAddress:        ipAddress,
+		Messages:         serviceMsgs,
+		ComponentContext: input.ComponentContext,
 	}
 
 	// 4. Call AI Service with dynamic options
@@ -197,7 +207,7 @@ func ChatWithTWCC(c *gin.Context) {
 			if string(chunk) == ": heartbeat\n\n" {
 				return nil
 			}
-			
+
 			_, err := c.Writer.Write(chunk)
 			if err != nil {
 				return err
@@ -208,13 +218,13 @@ func ChatWithTWCC(c *gin.Context) {
 
 		_, err := ai.ChatWithTWCC(c.Request.Context(), req, options...)
 		if err != nil {
-			// In streaming, we can't easily change Status Code after headers sent, 
+			// In streaming, we can't easily change Status Code after headers sent,
 			// but if the call fails immediately, we return JSON error.
 			if !c.Writer.Written() {
 				c.JSON(http.StatusInternalServerError, gin.H{
-					"status": "error",
+					"status":     "error",
 					"error_code": "AI_SERVICE_STREAM_ERROR",
-					"message": err.Error(),
+					"message":    err.Error(),
 				})
 			}
 		}
@@ -225,9 +235,9 @@ func ChatWithTWCC(c *gin.Context) {
 	logEntry, err := ai.ChatWithTWCC(c.Request.Context(), req, options...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"status": "error",
+			"status":     "error",
 			"error_code": "AI_SERVICE_ERROR",
-			"message": err.Error(),
+			"message":    err.Error(),
 		})
 		return
 	}
@@ -235,8 +245,8 @@ func ChatWithTWCC(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "success",
 		"data": gin.H{
-			"session":     logEntry.SessionID,
-			"content":     logEntry.Answer,
+			"session": logEntry.SessionID,
+			"content": logEntry.Answer,
 			"usage": gin.H{
 				"input_tokens":  logEntry.InputTokens,
 				"output_tokens": logEntry.OutputTokens,
@@ -250,4 +260,3 @@ func ChatWithTWCC(c *gin.Context) {
 		},
 	})
 }
-

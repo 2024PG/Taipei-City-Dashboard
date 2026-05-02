@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"TaipeiCityDashboardBE/app/services"
@@ -104,11 +105,12 @@ func GetComponentDataTool(ctx context.Context, args string) (string, error) {
 // 若未提供 index，則退而使用向量搜尋
 func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 	var params struct {
-		Index    string `json:"index"`
-		Query    string `json:"query"`
-		City     string `json:"city"`
-		TimeFrom string `json:"time_from"`
-		TimeTo   string `json:"time_to"`
+		Index            string                 `json:"index"`
+		Query            string                 `json:"query"`
+		City             string                 `json:"city"`
+		TimeFrom         string                 `json:"time_from"`
+		TimeTo           string                 `json:"time_to"`
+		ComponentContext map[string]interface{} `json:"component_context"`
 	}
 	if err := parseArgs(args, &params); err != nil {
 		return "", fmt.Errorf("參數解析失敗: %v", err)
@@ -121,6 +123,17 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 
 	targetIndex := params.Index
 	componentName := ""
+	if active := services.ComponentContextToPreferredResult(params.ComponentContext); active != nil {
+		if targetIndex == "" {
+			targetIndex = active.Index
+		}
+		if componentName == "" {
+			componentName = active.Name
+		}
+		if active.City != "" {
+			params.City = active.City
+		}
+	}
 
 	// index 未提供時，退而使用向量搜尋
 	if targetIndex == "" {
@@ -151,7 +164,7 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 		"name":       componentName,
 		"unit":       chartResult.Unit,
 		"query_type": chartResult.QueryType,
-		"data":       chartResult.Data,
+		"data":       truncateToolData(chartResult.Data, 80),
 	}
 	resultBytes, _ := json.Marshal(result)
 	return string(resultBytes), nil
@@ -161,12 +174,13 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 // city-data questions. It never accepts SQL, table names, or column names.
 func AnswerCityDataQuestionTool(ctx context.Context, args string) (string, error) {
 	var params struct {
-		UserQuestion   string  `json:"user_question"`
-		City           string  `json:"city"`
-		TimeFrom       string  `json:"time_from"`
-		TimeTo         string  `json:"time_to"`
-		TopK           int     `json:"top_k"`
-		ScoreThreshold float32 `json:"score_threshold"`
+		UserQuestion     string                 `json:"user_question"`
+		City             string                 `json:"city"`
+		TimeFrom         string                 `json:"time_from"`
+		TimeTo           string                 `json:"time_to"`
+		TopK             int                    `json:"top_k"`
+		ScoreThreshold   float32                `json:"score_threshold"`
+		ComponentContext map[string]interface{} `json:"component_context"`
 	}
 	if err := parseArgs(args, &params); err != nil {
 		return "", fmt.Errorf("參數解析失敗: %v", err)
@@ -176,12 +190,14 @@ func AnswerCityDataQuestionTool(ctx context.Context, args string) (string, error
 	}
 
 	pack, err := services.BuildComponentEvidencePack(ctx, services.ComponentEvidenceQuery{
-		UserQuestion:   params.UserQuestion,
-		City:           params.City,
-		TimeFrom:       params.TimeFrom,
-		TimeTo:         params.TimeTo,
-		TopK:           params.TopK,
-		ScoreThreshold: params.ScoreThreshold,
+		UserQuestion:        params.UserQuestion,
+		City:                params.City,
+		TimeFrom:            params.TimeFrom,
+		TimeTo:              params.TimeTo,
+		TopK:                params.TopK,
+		ScoreThreshold:      params.ScoreThreshold,
+		PreferredComponent:  services.ComponentContextToPreferredResult(params.ComponentContext),
+		PreferredComponents: services.ComponentContextToPreferredResults(params.UserQuestion, params.ComponentContext),
 	})
 	if err != nil {
 		return "", err
@@ -193,4 +209,52 @@ func AnswerCityDataQuestionTool(ctx context.Context, args string) (string, error
 
 func parseArgs(args string, v interface{}) error {
 	return json.Unmarshal([]byte(args), v)
+}
+
+func truncateToolData(data interface{}, maxItems int) interface{} {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return data
+	}
+	var normalized interface{}
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return data
+	}
+	truncated := false
+	result := truncateToolJSONValue(normalized, maxItems, &truncated)
+	if !truncated {
+		return result
+	}
+	return map[string]interface{}{
+		"items":     result,
+		"truncated": true,
+		"note":      fmt.Sprintf("Tool result was truncated to at most %d items per array. Use a narrower time range or filters for exact values.", maxItems),
+	}
+}
+
+func truncateToolJSONValue(value interface{}, maxItems int, truncated *bool) interface{} {
+	switch v := value.(type) {
+	case []interface{}:
+		if len(v) > maxItems {
+			v = v[:maxItems]
+			*truncated = true
+		}
+		for i := range v {
+			v[i] = truncateToolJSONValue(v[i], maxItems, truncated)
+		}
+		return v
+	case map[string]interface{}:
+		for key, item := range v {
+			v[key] = truncateToolJSONValue(item, maxItems, truncated)
+		}
+		return v
+	case string:
+		if len(v) > 2000 {
+			*truncated = true
+			return strings.TrimSpace(v[:2000]) + "...(truncated)"
+		}
+		return v
+	default:
+		return value
+	}
 }
