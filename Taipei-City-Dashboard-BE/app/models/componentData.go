@@ -103,6 +103,18 @@ type TimeSeriesDataOutput struct {
 }
 
 /*
+CascadeTimelineData Json Format:
+*/
+type CascadeTimelineData struct {
+	FilterLevel1 string  `gorm:"column:filter_level_1" json:"filter_level_1"`
+	FilterLevel2 string  `gorm:"column:filter_level_2" json:"filter_level_2"`
+	FilterLevel3 string  `gorm:"column:filter_level_3" json:"filter_level_3"`
+	Time         any     `gorm:"column:time" json:"time"`
+	SeriesName   string  `gorm:"column:series_name" json:"series_name"`
+	Value        float64 `gorm:"column:value" json:"value"`
+}
+
+/*
 MapLegendData Json Format:
 */
 type MapLegendData struct {
@@ -336,6 +348,28 @@ func GetTimeSeriesData(query *string, timeFrom string, timeTo string) (chartData
 	}
 
 	return chartDataOutput, nil
+}
+
+func GetCascadeTimelineData(query *string, timeFrom string, timeTo string) (chartData []CascadeTimelineData, err error) {
+	var queryString string
+
+	// 1. Check if query contains substring '%s'. If so, the component can be queried by time.
+	if strings.Count(*query, "%s") == 2 {
+		queryString = fmt.Sprintf(*query, timeFrom, timeTo)
+	} else {
+		queryString = *query
+	}
+
+	// 2. Get the data from the database
+	err = DBDashboard.Raw(queryString).Scan(&chartData).Error
+	if err != nil {
+		return chartData, err
+	}
+	if len(chartData) == 0 {
+		return chartData, err
+	}
+
+	return chartData, nil
 }
 
 func GetMapLegendData(query *string, timeFrom string, timeTo string) (chartData []MapLegendData, err error) {
