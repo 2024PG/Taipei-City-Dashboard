@@ -1,10 +1,8 @@
 import { ref, watch } from "vue";
 import { defineStore } from "pinia";
 import http from "../router/axios";
-import { useContentStore } from "./contentStore";
 
 export const useChatStore = defineStore("chat", () => {
-	const contentStore = useContentStore();
 	// 預設訊息
 	const defaultChatData = [
 		{
@@ -18,6 +16,19 @@ export const useChatStore = defineStore("chat", () => {
 
 	const recommendComponents = ref(null);
 	const componentListText = ref("");
+	const MAX_COMPONENT_LIST_ITEMS = 120;
+	const aiSystemPrompt = () =>
+		[
+			"你是【臺北城市儀表板】助理，只答臺北城市資料、政策與儀表板功能；離題請婉拒並引導改問相關問題。",
+			"數值/統計/比較/趨勢/排名/分布/最新/跨區/跨組件/不確定組件：必用 answer_city_data_question 取 evidence；單一組件單一地區即時或現況可用 query_city_data；找組件或建儀表板用 search_dashboards。",
+			"能判斷組件時帶 index/component_indexes。不得編造數值、SQL、table/column；不得只靠名稱或自身知識回答資料題。",
+			"只根據相關 evidence/components 回答；partial/not_answerable 或 evidence 不符時說資料不足/無法回答，不用不相關資料硬答。",
+			"evidence 回答：摘要、關鍵指標數值、比較、決策參考建議、資料限制。數值附 unit；缺 unit 寫「單位未提供」；非百分比不得加 %。",
+			"政策成效題若只有背景/靜態資料，說資料不足以判斷成效，並列缺少的使用率、資源、人力、等待、床位、滿意度、時間序列或政策前後資料。",
+			"若 active_component 存在且問目前頁面/組件/數值/時間，優先用其 index/city。query_city_data 結尾：📊 資料來源組件：{name}；answer_city_data_question 結尾列使用組件。",
+			"季度代碼如 1142=民國114年第2季/2025 Q2；若 evidence 有人讀格式直接引用；最新取 time 最大。",
+			componentListText.value,
+		].join("\n");
 
 	// 載入組件清單（只抓一次，快取在 store 內）
 	const loadComponentList = async () => {
@@ -27,9 +38,12 @@ export const useChatStore = defineStore("chat", () => {
 			const items = res.data?.data || [];
 			if (items.length === 0) return;
 			// 格式：index|名稱|城市|單位，每行一筆
+			const promptItems = items.slice(0, MAX_COMPONENT_LIST_ITEMS);
+			const omittedCount = items.length - promptItems.length;
 			componentListText.value =
-				"可用組件清單（index | 名稱）：\n" +
-				items.map((c) => `${c.index} | ${c.name}`).join("\n");
+				"組件索引提示（完整搜尋請用工具）：\n" +
+				promptItems.map((c) => `${c.index}|${c.name}`).join("\n") +
+				(omittedCount > 0 ? `\n...另有 ${omittedCount} 筆` : "");
 		} catch {
 			// 載入失敗不影響主流程
 		}
@@ -76,70 +90,11 @@ export const useChatStore = defineStore("chat", () => {
 		});
 
 		try {
-			const activeComponent =
-				contentStore.activeComponentContext ||
-				contentStore.currentDashboard.components?.[0] ||
-				null;
-			const componentContext = {
-				dashboard: {
-					index: contentStore.currentDashboard.index,
-					name: contentStore.currentDashboard.name,
-					city: contentStore.currentDashboard.city,
-					mode: contentStore.currentDashboard.mode,
-				},
-				active_component: activeComponent,
-				components: (contentStore.currentDashboard.components || []).map(
-					(component) => ({
-						id: component.id,
-						index: component.index,
-						name: component.name,
-						city: component.city,
-						query_type: component.query_type,
-						time_from: component.time_from,
-						time_to: component.time_to,
-						active_chart:
-							component.chart_config?.types?.[0] ||
-							component.query_type ||
-							null,
-						chart_config: {
-							types: component.chart_config?.types || [],
-							unit:
-								component.chart_config?.unit ||
-								component.unit ||
-								"",
-							categories:
-								component.chart_config?.categories || [],
-						},
-					})
-				),
-			};
 			const response = await http.post("ai/chat/twai", {
-				component_context: componentContext,
 				messages: [
 					{
 						role: "system",
-						content:
-							"你是【臺北城市儀表板】智慧助理，專門協助查詢臺北城市相關數據與儀表板功能。" +
-							"規則如下：" +
-							"0. 【離題拒絕】如果使用者詢問的問題與臺北城市儀表板、城市統計數據、公共政策、城市治理、儀表板功能完全無關（例如：娛樂資訊、名人、一般常識、其他城市或國家的非比較性問題），你必須婉拒回答，說明你只能協助臺北城市儀表板相關問題，並引導使用者詢問城市數據或儀表板相關問題。不可以使用自身訓練知識回答這類問題。" +
-							"1. 所有臺北城市相關的統計數據、百分比、人口、交通、環境、社福、長照等資料問題，你絕對不可以用自身訓練知識回答，必須呼叫工具取得資料庫中的 evidence 後再回答。以下情況必須呼叫 answer_city_data_question：（a）跨組件問題、（b）含有「哪裡」「哪個區」「哪一區」「最多」「最少」「最高」「最低」「最舊」「最新」「排名」「分布」等需要跨地區比較的問題、（c）比較/趨勢/現況/時間區間問題、（d）不確定用哪個組件時。呼叫時，若能從組件清單中找到名稱對應的 index（例如「舊屋/屋齡/老屋」→ house_age），必須在 component_indexes 參數帶入該 index，確保即使語意搜尋分數偏低也能查到正確資料。" +
-							"2. 使用 answer_city_data_question 後，只能根據工具回傳的 evidence JSON 回答；若 answerability.status 是 partial 或 not_answerable，必須明確說明資料不足、只能部分回答，或目前無法回答。" +
-							"3. 不可以自行編造數值，不可以自行產生 SQL，不可以要求或猜測 table name、column name，也不可以任意查資料表。" +
-							"4. 不可以只根據組件名稱或描述回答數值、趨勢、比較、判斷或現況問題；這類問題必須先取得 evidence。" +
-							"5. 只有在問題明確只需要單一組件、單一地區的即時或現況數據（例如「現在空氣品質」「今天氣溫」），且問題中沒有「哪裡」「哪個區」「比較」「排名」等跨地區比較詞時，才可以呼叫 query_city_data。呼叫時若能從組件清單找到明確匹配的 index 必須帶入，不可靠向量搜尋自行猜測；若 query_city_data 查無資料，如實告知，不可補值。" +
-							"6. 用戶想找相關組件、建立儀表板、詢問有哪些組件可用時，呼叫 search_dashboards 工具。" +
-							"7. 如果使用者問的是「某個儀表板/組件是做什麼的」這類說明型問題，可以根據組件描述或 search_dashboards 結果回答，但必須明確說這是根據組件描述，不是實際資料查詢結果。" +
-							"8. 使用 answer_city_data_question 的 evidence 後，回答格式必須是：先用 2~3 句摘要說明整體狀況；再列出關鍵指標與數值；接著做比較分析；再給出「可作為決策參考的建議」；最後說明資料限制。" +
-							"9. 每個數值都必須附上該 component 的 unit 欄位；若 unit 是空字串、null 或 evidence 未提供，請標示「單位未提供」，不可以自行猜測或補單位。" +
-							"10. 對「政策成效好不好」、「政策是否有效」、「有沒有改善」、「成效如何」這類問題，必須套用判斷邊界：如果 evidence 只有人口結構、背景指標或靜態數值，必須回答「目前資料不足以判斷政策成效，只能說明需求背景或壓力」。必須列出缺少的資料，例如服務使用率、長照據點數、照護人力、等待時間、床位數、服務滿意度、時間序列或政策前後比較。" +
-							"11. 只能使用與 user_question 直接相關的 components；不可把所有檢索結果都納入主要分析。若 evidence 中的 components 全部與問題無關（例如問「舊屋/老房子/建物年份」時，evidence 只有用電度數或氣溫資料），你必須回答「目前無法從資料庫中找到對應資料」，而不是用不相關資料作答或自行補充知識。不可說「提供的資料主要是關於 X 所以無法回答舊屋問題」然後繼續用 X 的資料回答。" +
-							"12. 比較分析必須根據 evidence 中實際存在的數值，例如哪些指標較高、哪些行政區數值較高或較需要優先關注；如果 evidence 沒有時間序列、服務資源、政策投入或成效資料，不能判斷政策成效，只能說資料不足。" +
-							"13. 建議只能作為決策參考，不能說成最終決策或政策結論；所有建議都要連回 evidence 中看到的資料差異。若 evidence 不足，只能建議後續需要補充哪些資料或進一步檢視哪些指標，不可以憑空建議加強宣傳、增加預算或調整政策。" +
-							"14. 對老化指數等 unit 空白或非百分比的指標，不可以自動加 %；若 evidence 沒有 unit，請寫「單位未提供」。可以用保守語句說明老化指數代表老年人口相對幼年人口的比例概念，但不能把它改寫成百分比。" +
-							"15. 凡使用 query_city_data 取得資料後，回覆結尾必須加上一行：「📊 資料來源組件：{name}」（name 為組件清單中對應的中文名稱）。凡使用 answer_city_data_question 取得 evidence 後，回覆結尾必須列出使用的 components 名稱。\n\n" +
-							"16. 如果 component_context.active_component 存在，使用者又正在詢問目前頁面、目前組件、該組件數值或時間資料，必須優先使用該 active component 的 index/city 呼叫工具，不可回答「使用的組件：無」。\n\n" +
-							"17. 【臺灣季度時間格式】部分組件（特別是 CascadeTimelineChart 類型，如舊屋級距分布）的 time 欄位使用臺灣民國季度代碼，格式為「YYY季次」，例如：1131=民國113年第1季(2024 Q1)、1132=民國113年第2季(2024 Q2)、1141=民國114年第1季(2025 Q1)、1142=民國114年第2季(2025 Q2)。後端已在 time 欄位標注人讀格式（如 \"1142 (民國114年第2季 / 2025 Q2)\"），請直接引用此格式回答使用者的年份季度問題，不可自行換算或猜測季度。若使用者問「最新資料」，請引用 time 欄位值最大的那一筆。\n\n" +
-							componentListText.value,
+						content: aiSystemPrompt(),
 					},
 					{ role: "user", content: userText },
 				],
@@ -150,14 +105,13 @@ export const useChatStore = defineStore("chat", () => {
 						function: {
 							name: "search_dashboards",
 							description:
-								"搜尋與用戶描述相關的臺北城市儀表板組件清單，當用戶想瀏覽或建立儀表板時使用",
+								"搜尋相關儀表板組件；用於找組件或建立儀表板。",
 							parameters: {
 								type: "object",
 								properties: {
 									query: {
 										type: "string",
-										description:
-											"用戶查詢的關鍵字或主題描述",
+										description: "查詢關鍵字或主題",
 									},
 								},
 								required: ["query"],
@@ -169,48 +123,48 @@ export const useChatStore = defineStore("chat", () => {
 						function: {
 							name: "answer_city_data_question",
 							description:
-								"取得可回答城市資料問題的 structured evidence JSON。適用於跨組件資料問題、比較、趨勢、現況、某日期或時間區間的狀況，或不確定應使用哪個組件時。若問題涉及政策成效，必須用 evidence 判斷資料是否足夠；背景指標不足以代表政策成效。工具不接受 SQL、table name 或 column name。",
+								"取得城市資料題的 evidence JSON；用於比較、趨勢、排名、跨區/跨組件、政策成效或不確定組件時。",
 							parameters: {
 								type: "object",
 								properties: {
 									user_question: {
 										type: "string",
 										description:
-											"使用者的完整自然語言問題，作為 semantic search 與 evidence 組裝依據",
+											"使用者完整問題",
 									},
 									city: {
 										type: "string",
 										enum: ["taipei", "metrotaipei"],
 										description:
-											"城市範圍，taipei 或 metrotaipei，預設 taipei",
+											"城市範圍，預設 taipei",
 									},
 									component_indexes: {
 										type: "array",
 										items: { type: "string" },
 										description:
-											"（選填）從組件清單中明確識別的組件 index 陣列，例如 [\"house_age\"]。填入後直接查詢這些組件，不受語意搜尋分數影響。",
+											"明確識別的組件 index 陣列",
 									},
 									time_from: {
 										type: "string",
 										description:
-											"查詢起始時間，格式 2006-01-02T15:04:05+08:00，不填則由後端預設",
+											"查詢起始時間",
 									},
 									time_to: {
 										type: "string",
 										description:
-											"查詢結束時間，格式 2006-01-02T15:04:05+08:00，不填則由後端預設",
+											"查詢結束時間",
 									},
 									top_k: {
 										type: "integer",
 										description:
-											"最多搜尋幾個相關組件，預設 5，最大 8",
+											"最多搜尋組件數，預設 5，最大 8",
 										minimum: 1,
 										maximum: 8,
 									},
 									score_threshold: {
 										type: "number",
 										description:
-											"語意搜尋相關性門檻，預設 0.75",
+											"語意搜尋門檻，預設 0.75",
 										minimum: 0,
 										maximum: 1,
 									},
@@ -224,33 +178,33 @@ export const useChatStore = defineStore("chat", () => {
 						function: {
 							name: "query_city_data",
 							description:
-								"自動搜尋組件並取得實際數據，用於回答具體數值問題（例如：目前空氣品質、交通流量、停車資訊等），一次呼叫即可完成",
+								"查單一組件/地區的具體即時或現況數據。",
 							parameters: {
 								type: "object",
 								properties: {
 									index: {
 										type: "string",
 										description:
-											"（選填）從組件清單中明確識別的組件 index，例如 house_age。若可判斷 index，優先帶入以避免向量搜尋選錯組件。",
+											"明確識別的組件 index",
 									},
 									query: {
 										type: "string",
-										description: "查詢的主題或關鍵字",
+										description: "查詢主題或關鍵字",
 									},
 									city: {
 										type: "string",
 										description:
-											"城市名稱，taipei 或 metrotaipei，預設 taipei",
+											"城市名稱，預設 taipei",
 									},
 									time_from: {
 										type: "string",
 										description:
-											"查詢起始時間，格式 2006-01-02T15:04:05+08:00，不填則預設最近 24 小時",
+											"查詢起始時間",
 									},
 									time_to: {
 										type: "string",
 										description:
-											"查詢結束時間，格式 2006-01-02T15:04:05+08:00，不填則為現在",
+											"查詢結束時間",
 									},
 								},
 								required: ["query"],

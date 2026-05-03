@@ -23,6 +23,8 @@ var (
 	twccModel   llms.Model
 )
 
+const maxPromptContextComponents = 10
+
 func init() {
 	// Initialize semaphore from config
 	aiSemaphore = semaphore.NewWeighted(int64(global.TWCC.MaxConcurrent))
@@ -76,11 +78,12 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 		availableTools += t.Function.Name
 	}
 
-	// Inject or merge a strict system constraint to prevent tool hallucination
-	instruction := fmt.Sprintf("\nSystem Instruction: You MUST ONLY use the tools provided in your toolset: [%s]. NEVER hallucinate or make up tool names like 'get_scenic_spots'. If a requested action cannot be performed by these specific tools, respond to the user directly with text and explain you don't have that capability.", availableTools)
+	// Inject or merge a compact system constraint to prevent tool hallucination.
+	instruction := fmt.Sprintf("\nOnly use these tools: [%s]. Do not invent tool names. If no tool fits, answer directly.", availableTools)
 	if len(req.ComponentContext) > 0 {
-		if contextBytes, err := json.Marshal(req.ComponentContext); err == nil {
-			instruction += "\nCurrent dashboard/component context from frontend: " + string(contextBytes) + "\nIf active_component exists and the user asks about the current component or a concrete value/time period, prefer that active_component index/city in tool calls. Do not say the used component is none when active_component is present."
+		promptContext := compactComponentContextForPrompt(req.ComponentContext)
+		if contextBytes, err := json.Marshal(promptContext); err == nil {
+			instruction += "\nContext: " + string(contextBytes) + "\nIf user asks current page/component/value/time, prefer active_component index/city."
 			logs.FInfo("AI component context for prompt: %s", string(contextBytes))
 		}
 	}
@@ -369,6 +372,57 @@ func enrichToolArguments(toolName string, args string, componentContext map[stri
 	return args
 }
 
+func compactComponentContextForPrompt(componentContext map[string]interface{}) map[string]interface{} {
+	compact := make(map[string]interface{})
+	copyPromptKey(compact, componentContext, "dashboard")
+	if active := compactPromptComponent(componentContext["active_component"]); len(active) > 0 {
+		compact["active_component"] = active
+	}
+	if components, ok := componentContext["components"].([]interface{}); ok {
+		compact["component_count"] = len(components)
+		limit := len(components)
+		if limit > maxPromptContextComponents {
+			limit = maxPromptContextComponents
+		}
+		promptComponents := make([]map[string]interface{}, 0, limit)
+		for i := 0; i < limit; i++ {
+			if component := compactPromptComponent(components[i]); len(component) > 0 {
+				promptComponents = append(promptComponents, component)
+			}
+		}
+		compact["components"] = promptComponents
+	}
+	return compact
+}
+
+func copyPromptKey(target map[string]interface{}, source map[string]interface{}, key string) {
+	if value, ok := source[key]; ok {
+		target[key] = value
+	}
+}
+
+func compactPromptComponent(raw interface{}) map[string]interface{} {
+	component, ok := raw.(map[string]interface{})
+	if !ok || len(component) == 0 {
+		return nil
+	}
+	compact := make(map[string]interface{})
+	for _, key := range []string{"index", "name", "city", "query_type", "time_from", "time_to", "active_chart", "unit"} {
+		if value, ok := component[key]; ok && value != nil && value != "" {
+			compact[key] = value
+		}
+	}
+	if chartConfig, ok := component["chart_config"].(map[string]interface{}); ok {
+		if unit, ok := chartConfig["unit"]; ok && unit != nil && unit != "" {
+			compact["unit"] = unit
+		}
+		if types, ok := chartConfig["types"].([]interface{}); ok && len(types) > 0 {
+			compact["active_chart"] = types[0]
+		}
+	}
+	return compact
+}
+
 func truncateLogText(text string, max int) string {
 	if len(text) <= max {
 		return text
@@ -379,7 +433,7 @@ func truncateLogText(text string, max int) string {
 func limitToolResultForLLM(toolName string, text string) string {
 	max := 20000
 	if toolName == "answer_city_data_question" {
-		max = 120000
+		max = 8000
 	}
 	if len(text) <= max {
 		return text
