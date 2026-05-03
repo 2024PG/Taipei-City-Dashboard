@@ -51,7 +51,7 @@ func RebuildQdrantPublicCollection() ([]models.QuertChartAndConponentForQdrant, 
 		log.Println("No public component data found. Aborting Qdrant rebuild.")
 		return data, nil
 	}
-	
+
 	// 2. Generate vectors for each data point	points, vectorSize, err := generateVectors(data)
 	points, vectorSize, err := generateVectors(data)
 	if err != nil {
@@ -61,6 +61,9 @@ func RebuildQdrantPublicCollection() ([]models.QuertChartAndConponentForQdrant, 
 
 	// 3. Recreate Qdrant collection
 	collectionName := os.Getenv("QDRANT_COLLECTION_NAME")
+	if collectionName == "" {
+		collectionName = global.Qdrant.Collection
+	}
 	if collectionName == "" {
 		collectionName = "query_charts" // Default collection name
 	}
@@ -105,7 +108,7 @@ func generateVectors(data []models.QuertChartAndConponentForQdrant) ([]qdrantPoi
 		combinedText = strings.ReplaceAll(combinedText, "\r\n", " ")
 		combinedText = strings.ReplaceAll(combinedText, "\r", " ")
 		combinedText = strings.ReplaceAll(combinedText, "\n", " ")
-		
+
 		if combinedText == "" {
 			log.Printf("Skipping item ID %d (%s) due to empty combined text for vector generation.", item.ID, item.Name)
 			continue

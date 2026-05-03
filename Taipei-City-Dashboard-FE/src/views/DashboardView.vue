@@ -95,6 +95,8 @@ function handleMoreInfo(item) {
           toggleFavorite(id,item.name,item.city);
         }
       "
+      @mouseenter="contentStore.setActiveComponentContext(item)"
+      @focusin="contentStore.setActiveComponentContext(item)"
       @info="
         (item) => {
           handleMoreInfo(item);
@@ -155,6 +157,8 @@ function handleMoreInfo(item) {
           toggleFavorite(id,item.name,item.city);
         }
       "
+      @mouseenter="contentStore.setActiveComponentContext(item)"
+      @focusin="contentStore.setActiveComponentContext(item)"
       @info="
         (item) => {
           handleMoreInfo(item);

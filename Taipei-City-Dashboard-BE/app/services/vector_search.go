@@ -3,6 +3,7 @@ package services
 import (
 	"TaipeiCityDashboardBE/app/models"
 	"TaipeiCityDashboardBE/global"
+	"TaipeiCityDashboardBE/logs"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -33,14 +34,18 @@ func SearchQdrantComponents(ctx context.Context, query string, limit int, scoreT
 	// 2. 準備 Qdrant 搜尋請求
 	// 為了避免去重後數量不足，向 Qdrant 請求的數量稍微放大 (例如 limit * 2)
 	fetchLimit := limit * 2
-	
+
 	collectionName := os.Getenv("QDRANT_COLLECTION_NAME")
+	if collectionName == "" {
+		collectionName = global.Qdrant.Collection
+	}
 	if collectionName == "" {
 		collectionName = "query_charts"
 	}
 
 	searchURL := fmt.Sprintf("%s/collections/%s/points/search", global.Qdrant.Url, collectionName)
-	
+	logs.FInfo("Qdrant search request: host=%s collection=%s limit=%d fetch_limit=%d score_threshold=%.3f query=%q embedding_dim=%d embedding_preview=%v", global.Qdrant.Url, collectionName, limit, fetchLimit, scoreThreshold, query, len(vector), vectorPreview(vector, 8))
+
 	qdrantReqBody := map[string]interface{}{
 		"vector":          vector,
 		"limit":           fetchLimit,
@@ -80,6 +85,12 @@ func SearchQdrantComponents(ctx context.Context, query string, limit int, scoreT
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&qdrantResp); err != nil {
 		return nil, err
+	}
+	for i, hit := range qdrantResp.Result {
+		index, _ := hit.Payload["index"].(string)
+		name, _ := hit.Payload["name"].(string)
+		city, _ := hit.Payload["city"].(string)
+		logs.FInfo("Qdrant retrieved hit %d: id=%v score=%.5f index=%s name=%s city=%s", i+1, hit.Id, hit.Score, index, name, city)
 	}
 
 	// 5. 執行去重複邏輯 (移植自前端 Vue 的 reduce 邏輯)
@@ -129,4 +140,11 @@ func SearchQdrantComponents(ctx context.Context, query string, limit int, scoreT
 	}
 
 	return finalResults, nil
+}
+
+func vectorPreview(vector []float32, limit int) []float32 {
+	if len(vector) <= limit {
+		return vector
+	}
+	return vector[:limit]
 }

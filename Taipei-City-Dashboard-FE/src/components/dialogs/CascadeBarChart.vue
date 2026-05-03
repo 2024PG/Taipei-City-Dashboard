@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed } from "vue";
 import BarChart from "./BarChart.vue";
 import ColumnChart from "./ColumnChart.vue";
 import DonutChart from "./DonutChart.vue";
@@ -18,159 +18,119 @@ import PolarAreaChart from "./PolarAreaChart.vue";
  *   ColumnChart, BarChart, DonutChart, TreemapChart, PolarAreaChart
  */
 const props = defineProps([
- "chart_config",
- "activeChart",
- "series",
- "map_config",
- "map_filter",
- "map_filter_on",
+	"chart_config",
+	"activeChart",
+	"series",
+	"map_config",
+	"map_filter",
+	"map_filter_on",
 ]);
 
 const emits = defineEmits([
- "filterByParam",
- "filterByLayer",
- "clearByParamFilter",
- "clearByLayerFilter",
+	"filterByParam",
+	"filterByLayer",
+	"clearByParamFilter",
+	"clearByLayerFilter",
 ]);
 
 // ── Normalize series ──────────────────────────────────────────────────────────
-// SQL encodes name as "縣市/行政區"; split here to restore both fields
 const normalizedSeries = computed(() =>
- (props.series || []).map((d) => {
-  const raw = d.name ?? d["縣市名稱"] ?? "";
-  const slash = raw.indexOf("/");
-  return {
-   name:     slash >= 0 ? raw.slice(0, slash) : raw,
-   district: slash >= 0 ? raw.slice(slash + 1) : "",
-   type:     d.type ?? d.x_axis ?? "",
-   icon:     d.icon ?? "",
-   value:    d.value ?? d.y_axis ?? 0,
-  };
- })
+	(props.series || []).map((d) => ({
+		name:  d.name  ?? d["縣市"] ?? "",
+		type:  d.type  ?? d.x_axis  ?? "",
+		icon:  d.icon  ?? "",
+		value: d.value ?? d.y_axis  ?? 0,
+	}))
 );
 
 // ── Filter labels ─────────────────────────────────────────────────────────────
 const labels = computed(
- () => props.chart_config.categories ?? ["縣市", "行政區", "舊屋級距"]
+	() => props.chart_config.categories ?? ["縣市", "時間季度", "舊屋級距"]
 );
 
 // ── Filter state ──────────────────────────────────────────────────────────────
-const sel1 = ref(""); // 縣市
-const sel2 = ref(""); // 行政區
-const sel3 = ref(""); // 舊屋級距
+const sel1 = ref("");
+const sel2 = ref("");
+const sel3 = ref("");
 
 // ── Option lists ──────────────────────────────────────────────────────────────
 const opts1 = computed(() => [
- ...new Set(normalizedSeries.value.map((d) => d.name).filter(Boolean)),
+	...new Set(normalizedSeries.value.map((d) => d.name).filter(Boolean)),
 ]);
 
 const opts2 = computed(() => {
- const base = sel1.value
-  ? normalizedSeries.value.filter((d) => d.name === sel1.value)
-  : normalizedSeries.value;
- return [...new Set(base.map((d) => d.district).filter(Boolean))];
+	const base = sel1.value
+		? normalizedSeries.value.filter((d) => d.name === sel1.value)
+		: normalizedSeries.value;
+	return [...new Set(base.map((d) => d.type).filter(Boolean))];
 });
 
 const opts3 = computed(() => [
- ...new Set(normalizedSeries.value.map((d) => d.icon).filter(Boolean)),
+	...new Set(normalizedSeries.value.map((d) => d.icon).filter(Boolean)),
 ]);
 
 const sel1Model = computed({
- get: () => sel1.value,
- set: (val) => {
-  sel1.value = val;
-  sel2.value = "";
- },
+	get: () => sel1.value,
+	set: (val) => {
+		sel1.value = val;
+		sel2.value = "";
+	},
 });
 
 // ── Core filter ───────────────────────────────────────────────────────────────
 const filteredData = computed(() =>
- normalizedSeries.value.filter((d) => {
-  if (sel1.value && d.name     !== sel1.value) return false;
-  if (sel2.value && d.district !== sel2.value) return false;
-  if (sel3.value && d.icon     !== sel3.value) return false;
-  return true;
- })
+	normalizedSeries.value.filter((d) => {
+		if (sel1.value && d.name !== sel1.value) return false;
+		if (sel2.value && d.type !== sel2.value) return false;
+		if (sel3.value && d.icon !== sel3.value) return false;
+		return true;
+	})
 );
 
-// ── Grouping: 時間季度 always on X-axis ───────────────────────────────────────
-const groupKey = computed(() => "type");
-
-// ── Map filter sync ───────────────────────────────────────────────────────────
-const selectedQuarter = ref("1142"); // 預設最新季度
-
-function syncMapFilter() {
- if (!props.map_filter_on || props.map_filter?.mode !== "byParam") return;
- const q = selectedQuarter.value;
- if (sel2.value) {
-  // 行政區 + 季度
-  emits("filterByParam",
-   { mode: "byParam", byParam: { xParam: "name", yParam: "quarter" } },
-   props.map_config, sel2.value, q);
- } else if (sel1.value) {
-  // 縣市全區 + 季度
-  emits("filterByParam",
-   { mode: "byParam", byParam: { xParam: "city", yParam: "quarter" } },
-   props.map_config, sel1.value, q);
- } else {
-  // 只篩季度
-  emits("filterByParam",
-   { mode: "byParam", byParam: { xParam: "quarter" } },
-   props.map_config, q, "");
- }
-}
-
-// 點擊圖表的時間季度 bar → 更新地圖季度
-function handleSubChartFilter(_f, _c, x) {
- selectedQuarter.value = x;
- syncMapFilter();
-}
-
-// 再次點擊同一 bar 取消 → 回預設季度
-function handleSubChartClear() {
- selectedQuarter.value = "1142";
- syncMapFilter();
-}
-
-watch([sel1, sel2], syncMapFilter);
-onMounted(syncMapFilter);
+// ── Grouping ──────────────────────────────────────────────────────────────────
+const groupKey = computed(() => {
+	if (sel1.value && sel2.value) return "icon";
+	if (sel1.value && opts2.value.length > 0) return "type";
+	if (sel1.value) return "icon";
+	return "name";
+});
 
 // ── Aggregated chart data [{x, y}] ────────────────────────────────────────────
 const chartData = computed(() => {
- const totals = {};
- filteredData.value.forEach((d) => {
-  const key = d[groupKey.value];
-  totals[key] = (totals[key] || 0) + Number(d.value);
- });
- return Object.entries(totals).map(([label, total]) => ({
-  x: label,
-  y: total,
- }));
+	const totals = {};
+	filteredData.value.forEach((d) => {
+		const key = d[groupKey.value];
+		totals[key] = (totals[key] || 0) + Number(d.value);
+	});
+	return Object.entries(totals).map(([label, total]) => ({
+		x: label,
+		y: total,
+	}));
 });
 
 const subSeries = computed(() => [{ data: chartData.value }]);
 
 // Strip categories so sub-charts use data's own x-axis labels, not the filter labels
 const subChartConfig = computed(() => ({
- ...props.chart_config,
- categories: undefined,
+	...props.chart_config,
+	categories: undefined,
 }));
 
 // ── Sub-chart type selector ───────────────────────────────────────────────────
 const COMPATIBLE = ["ColumnChart", "BarChart", "DonutChart", "TreemapChart", "PolarAreaChart"];
 const chartLabelMap = {
- ColumnChart:   "縱向長條圖",
- BarChart:      "橫向長條圖",
- DonutChart:    "圓餅圖",
- TreemapChart:  "矩形圖",
- PolarAreaChart:"極座標圖",
+	ColumnChart:   "縱向長條圖",
+	BarChart:      "橫向長條圖",
+	DonutChart:    "圓餅圖",
+	TreemapChart:  "矩形圖",
+	PolarAreaChart:"極座標圖",
 };
 const chartMap = { ColumnChart, BarChart, DonutChart, TreemapChart, PolarAreaChart };
 
 const subChartOptions = computed(() =>
- (props.chart_config.types || [])
-  .filter((t) => COMPATIBLE.includes(t))
-  .map((t) => ({ key: t, label: chartLabelMap[t] }))
+	(props.chart_config.types || [])
+		.filter((t) => COMPATIBLE.includes(t))
+		.map((t) => ({ key: t, label: chartLabelMap[t] }))
 );
 
 // Default: ColumnChart (縱向長條圖)
@@ -182,7 +142,7 @@ const selectedChart = ref("ColumnChart");
     v-if="activeChart === 'CascadeBarChart'"
     class="cascadebarchart"
   >
-    <!-- 三層篩選器（時間季度固定為X軸） -->
+    <!-- 三層篩選器 -->
     <div class="cascadebarchart-filters">
       <label class="cascadebarchart-filter">
         <span>{{ labels[0] }}</span>
@@ -255,9 +215,9 @@ const selectedChart = ref("ColumnChart");
       :map_config="map_config"
       :map_filter="map_filter"
       :map_filter_on="map_filter_on"
-      @filter-by-param="handleSubChartFilter"
+      @filter-by-param="(...args) => emits('filterByParam', ...args)"
       @filter-by-layer="(...args) => emits('filterByLayer', ...args)"
-      @clear-by-param-filter="handleSubChartClear"
+      @clear-by-param-filter="(...args) => emits('clearByParamFilter', ...args)"
       @clear-by-layer-filter="(...args) => emits('clearByLayerFilter', ...args)"
     />
     <p

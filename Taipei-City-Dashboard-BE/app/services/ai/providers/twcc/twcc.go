@@ -34,7 +34,7 @@ func New(apiKey, baseURL, model string, timeout int) *TWCC {
 		ModelName:  model,
 		HTTPClient: &http.Client{Timeout: time.Duration(timeout) * time.Second},
 		Temperature: 0.7,
-		MaxTokens:   350,
+		MaxTokens:   1500,
 	}
 }
 
@@ -110,6 +110,9 @@ func (m *TWCC) GenerateContent(ctx context.Context, messages []llms.MessageConte
 	twccParams := TWCCParameters{}
 	if val, ok := opts.Metadata["max_new_tokens"].(int); ok {
 		twccParams.MaxNewTokens = &val
+	} else {
+		defaultMax := m.MaxTokens
+		twccParams.MaxNewTokens = &defaultMax
 	}
 	if val, ok := opts.Metadata["temperature"].(float64); ok {
 		twccParams.Temperature = &val
