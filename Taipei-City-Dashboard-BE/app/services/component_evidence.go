@@ -18,7 +18,7 @@ import (
 const (
 	defaultEvidenceTopK           = 5
 	maxEvidenceTopK               = 8
-	defaultEvidenceScoreThreshold = 0.82
+	defaultEvidenceScoreThreshold = 0.75
 	maxEvidenceArrayItems         = 300
 )
 
@@ -36,6 +36,10 @@ type ComponentEvidenceQuery struct {
 	ScoreThreshold      float32           `json:"score_threshold"`
 	PreferredComponent  *ComponentResult  `json:"preferred_component,omitempty"`
 	PreferredComponents []ComponentResult `json:"preferred_components,omitempty"`
+	// ForcedIndexes bypasses Qdrant score filtering and directly includes these component
+	// indexes in the evidence. Useful when the AI can identify the correct index from the
+	// component list but the semantic search score may be low for colloquial queries.
+	ForcedIndexes []string `json:"forced_indexes,omitempty"`
 }
 
 type EvidenceTimeRange struct {
@@ -124,6 +128,24 @@ func BuildComponentEvidencePack(ctx context.Context, query ComponentEvidenceQuer
 	timeFrom, timeTo, defaulted := normalizeEvidenceTimeRange(query.UserQuestion, query.TimeFrom, query.TimeTo)
 	pack.TimeRange = EvidenceTimeRange{From: timeFrom, To: timeTo, Defaulted: defaulted}
 
+	// Convert ForcedIndexes to high-priority candidates that bypass Qdrant score filtering.
+	forcedCandidates := make([]ComponentResult, 0, len(query.ForcedIndexes))
+	for _, idx := range query.ForcedIndexes {
+		if idx == "" {
+			continue
+		}
+		city := query.City
+		if city == "" {
+			city = "taipei"
+		}
+		forcedCandidates = append(forcedCandidates, ComponentResult{
+			Index: idx,
+			City:  city,
+			Score: 3.0, // higher than any Qdrant or preferred score → always included first
+		})
+		logs.FInfo("RAG forced index: %s city=%s", idx, city)
+	}
+
 	preferredCandidates := normalizePreferredComponents(query.PreferredComponent, query.PreferredComponents)
 	preferredCandidates = narrowHighConfidencePreferredComponents(preferredCandidates)
 	candidates, err := searchQdrantComponentsForEvidence(ctx, query.UserQuestion, query.TopK, query.ScoreThreshold)
@@ -139,7 +161,13 @@ func BuildComponentEvidencePack(ctx context.Context, query ComponentEvidenceQuer
 			return pack, nil
 		}
 	}
+	// Forced indexes take the highest priority: prepend before preferred, then Qdrant candidates.
+	if len(forcedCandidates) > 0 {
+		candidates = mergePreferredComponents(forcedCandidates, candidates, query.TopK)
+	}
 	candidates = mergePreferredComponents(preferredCandidates, candidates, query.TopK)
+	// Keyword-based injection: supplement Qdrant when domain vocabulary doesn't match embeddings.
+	candidates = injectKeywordComponents(query.UserQuestion, candidates, query.City)
 	if len(candidates) == 0 && err != nil {
 		pack.Answerability = EvidenceAnswerability{
 			Status: "not_answerable",
@@ -177,6 +205,13 @@ func BuildComponentEvidencePack(ctx context.Context, query ComponentEvidenceQuer
 		component.Unit = result.Unit
 		if result.City != "" {
 			component.City = result.City
+		}
+
+		// For CascadeTimelineChart components, annotate Taiwan quarter codes and filter by
+		// the year/quarter the user asked about (all happens in-memory, no DB change needed).
+		if result.QueryType == "CascadeTimelineChart" && result.Data != nil {
+			quarterCodes := extractTaiwanQuarterCodesFromQuestion(query.UserQuestion)
+			result.Data = annotateCascadeTimelineData(result.Data, quarterCodes)
 		}
 
 		switch {
@@ -229,11 +264,19 @@ func qdrantCollectionName() string {
 	return "query_charts"
 }
 
+// normalizeEvidenceTimeRange returns the time range to use for evidence retrieval.
+// Unlike the dashboard view (which defaults to 24h), evidence queries default to a
+// 5-year window so that quarterly/annual static components (e.g. house_age) return
+// data without needing a retry. Real-time components are unaffected: their DB queries
+// already return the most recent records within any window that includes today.
 func normalizeEvidenceTimeRange(question string, timeFrom string, timeTo string) (string, string, bool) {
 	if timeFrom == "" && timeTo == "" {
 		if from, to, ok := extractYearMonthRange(question); ok {
 			return from, to, false
 		}
+		loc, _ := time.LoadLocation("Asia/Taipei")
+		now := time.Now().In(loc)
+		return now.AddDate(-5, 0, 0).Format(taipeiTimeLayout), now.Format(taipeiTimeLayout), true
 	}
 	return NormalizeComponentTimeRange(timeFrom, timeTo)
 }
@@ -349,6 +392,24 @@ func ComponentContextToPreferredResult(componentContext map[string]interface{}) 
 	}
 }
 
+func ComponentContextToRelevantActiveResult(question string, componentContext map[string]interface{}) *ComponentResult {
+	active := ComponentContextToPreferredResult(componentContext)
+	if active == nil {
+		return nil
+	}
+	dashboard, _ := componentContext["dashboard"].(map[string]interface{})
+	dashboardName, _ := dashboard["name"].(string)
+	score := contextComponentMatchScore(question, dashboardName, active.Name)
+	if questionReferencesActiveComponent(question) {
+		score += 1.5
+	}
+	if score <= 0 {
+		return nil
+	}
+	active.Score = score
+	return active
+}
+
 func ComponentContextToPreferredResults(question string, componentContext map[string]interface{}) []ComponentResult {
 	components, _ := componentContext["components"].([]interface{})
 	if len(components) == 0 {
@@ -411,9 +472,69 @@ func contextComponentMatchScore(question string, dashboardName string, component
 	return score
 }
 
+func questionReferencesActiveComponent(question string) bool {
+	q := strings.ToLower(question)
+	phrases := []string{
+		"目前頁面", "目前組件", "這個組件", "此組件", "這張圖", "這個圖", "目前圖表", "當前組件",
+		"active component", "current component", "this chart", "this component",
+	}
+	for _, phrase := range phrases {
+		if strings.Contains(q, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func componentNameTokens(name string) []string {
 	cleaned := strings.NewReplacer("(", " ", ")", " ", "（", " ", "）", " ", "/", " ", "-", " ", "_", " ").Replace(name)
 	return strings.Fields(cleaned)
+}
+
+// keywordComponentHints maps domain vocabulary to component indexes.
+// When Qdrant semantic search misses a component due to vocabulary mismatch
+// (e.g. colloquial "屋子" vs formal "舊屋"), this table injects the right index.
+var keywordComponentHints = []struct {
+	keywords []string
+	index    string
+}{
+	{
+		keywords: []string{
+			"舊屋", "老屋", "屋齡", "老房子", "舊房子", "最舊", "老建物", "舊建物", "屋子", "建物年",
+			"房子", "建物", "年以上", "五十年", "50年", "四十年", "40年", "三十年", "30年",
+			"二十年", "20年", "老化", "屋況", "老齡", "老舊", "級距",
+		},
+		index: "house_age",
+	},
+}
+
+// injectKeywordComponents supplements Qdrant results with indexes matched by keyword.
+// It only injects when the index is not already present in candidates.
+func injectKeywordComponents(question string, candidates []ComponentResult, city string) []ComponentResult {
+	q := strings.ToLower(question)
+	for _, hint := range keywordComponentHints {
+		for _, kw := range hint.keywords {
+			if strings.Contains(q, kw) {
+				alreadyPresent := false
+				for _, c := range candidates {
+					if c.Index == hint.index {
+						alreadyPresent = true
+						break
+					}
+				}
+				if !alreadyPresent {
+					logs.FInfo("RAG keyword injection: %q matched %q → adding %s", question, kw, hint.index)
+					candidates = append(candidates, ComponentResult{
+						Index: hint.index,
+						City:  city,
+						Score: 2.5,
+					})
+				}
+				break
+			}
+		}
+	}
+	return candidates
 }
 
 func preferredComponentsLog(components []ComponentResult) string {
@@ -484,6 +605,132 @@ func isEmptyJSONValue(value interface{}) bool {
 	default:
 		return false
 	}
+}
+
+// taiwanQuarterToLabel converts a Taiwan quarter code like "1131" to a human-readable label.
+// Returns the original string unchanged if it does not match the YYYS pattern.
+func taiwanQuarterToLabel(code string) string {
+	if len(code) != 4 {
+		return code
+	}
+	rocYear, err1 := strconv.Atoi(code[:3])
+	quarter, err2 := strconv.Atoi(code[3:])
+	if err1 != nil || err2 != nil || quarter < 1 || quarter > 4 {
+		return code
+	}
+	gregorianYear := rocYear + 1911
+	return fmt.Sprintf("%s (民國%d年第%d季 / %d Q%d)", code, rocYear, quarter, gregorianYear, quarter)
+}
+
+// extractTaiwanQuarterCodesFromQuestion parses the user question for Taiwan year/quarter references.
+// Returns nil when no specific year or quarter is mentioned (meaning: no filtering needed).
+func extractTaiwanQuarterCodesFromQuestion(question string) []string {
+	// Direct 4-digit Taiwan quarter code already in text (e.g. "1131")
+	re4digit := regexp.MustCompile(`\b(1[0-9]{3})\b`)
+	if matches := re4digit.FindAllString(question, -1); len(matches) > 0 {
+		return matches
+	}
+
+	var rocYear int
+	found := false
+
+	// 民國 year: "民國113年"
+	if m := regexp.MustCompile(`民國\s*(\d{2,3})\s*年`).FindStringSubmatch(question); len(m) > 1 {
+		if y, err := strconv.Atoi(m[1]); err == nil {
+			rocYear, found = y, true
+		}
+	}
+	// Bare 3-digit ROC year: "113年"
+	if !found {
+		if m := regexp.MustCompile(`\b(\d{3})\s*年`).FindStringSubmatch(question); len(m) > 1 {
+			if y, err := strconv.Atoi(m[1]); err == nil && y >= 100 && y <= 150 {
+				rocYear, found = y, true
+			}
+		}
+	}
+	// Gregorian year: "2024年"
+	if !found {
+		if m := regexp.MustCompile(`(20\d{2})\s*年`).FindStringSubmatch(question); len(m) > 1 {
+			if y, err := strconv.Atoi(m[1]); err == nil {
+				rocYear, found = y-1911, true
+			}
+		}
+	}
+	if !found || rocYear < 100 || rocYear > 150 {
+		return nil
+	}
+
+	// Check for a specific quarter within that year
+	if m := regexp.MustCompile(`第\s*([1-4])\s*季|[Qq]\s*([1-4])`).FindStringSubmatch(question); len(m) >= 3 {
+		q := m[1]
+		if q == "" {
+			q = m[2]
+		}
+		if q != "" {
+			return []string{fmt.Sprintf("%d%s", rocYear, q)}
+		}
+	}
+
+	// No specific quarter → return all four quarters for that year
+	codes := make([]string, 4)
+	for q := 1; q <= 4; q++ {
+		codes[q-1] = fmt.Sprintf("%d%d", rocYear, q)
+	}
+	return codes
+}
+
+// annotateCascadeTimelineData converts Taiwan quarter codes in the time field to human-readable
+// labels, and optionally filters rows to only those matching the requested quarter codes.
+// Returns the original data unchanged if it cannot be processed as a flat row array.
+func annotateCascadeTimelineData(data interface{}, quarterFilter []string) interface{} {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return data
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) == 0 {
+		return data
+	}
+
+	filterSet := make(map[string]struct{}, len(quarterFilter))
+	for _, code := range quarterFilter {
+		filterSet[code] = struct{}{}
+	}
+
+	result := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		// Extract raw time value (may be stored as string or number)
+		timeVal := ""
+		if t, ok := row["time"]; ok {
+			switch v := t.(type) {
+			case string:
+				timeVal = v
+			case float64:
+				timeVal = fmt.Sprintf("%d", int(v))
+			case int64:
+				timeVal = fmt.Sprintf("%d", v)
+			}
+		}
+
+		// Apply quarter filter
+		if len(filterSet) > 0 {
+			if _, ok := filterSet[timeVal]; !ok {
+				continue
+			}
+		}
+
+		// Annotate time field
+		if label := taiwanQuarterToLabel(timeVal); label != timeVal {
+			row["time"] = label
+		}
+		result = append(result, row)
+	}
+
+	// If the filter produced no results (e.g. data predates the requested quarter), keep all
+	if len(filterSet) > 0 && len(result) == 0 {
+		return data
+	}
+	return result
 }
 
 func truncateForEvidence(data interface{}, maxItems int) (interface{}, bool) {

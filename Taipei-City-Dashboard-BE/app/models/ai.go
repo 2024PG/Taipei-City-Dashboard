@@ -25,6 +25,7 @@ type AIChatLog struct {
 	IPAddress        string    `gorm:"type:varchar(45);not null" json:"ip_address"`
 	CreatedAt        time.Time `gorm:"not null;default:now()" json:"created_at"`
 	ComponentResults string    `gorm:"-" json:"component_results,omitempty"`
+	EvidenceResults  string    `gorm:"type:text" json:"evidence_results,omitempty"`
 }
 
 // TableName overrides the table name used by AIChatLog to `ai_chatlog`

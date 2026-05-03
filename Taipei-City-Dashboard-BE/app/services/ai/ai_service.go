@@ -219,7 +219,7 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 			}
 
 			// D. LangChain Strict Pairing: Assistant Message -> Tool Message
-			result = limitToolResultForLLM(result, 20000)
+			result = limitToolResultForLLM(tc.FunctionCall.Name, result)
 			logs.FInfo("AI tool context for LLM tool=%s result=%s", tc.FunctionCall.Name, truncateLogText(result, 4000))
 			toolResMsg := llms.MessageContent{
 				Role: llms.ChatMessageTypeTool,
@@ -287,6 +287,7 @@ func ChatWithTWCC(ctx context.Context, req AIChatRequest, options ...llms.CallOp
 			}
 		}
 		chatLog.ComponentResults = componentResults
+		chatLog.EvidenceResults = evidenceResult
 	}
 
 	// 5. Persist Log
@@ -375,7 +376,11 @@ func truncateLogText(text string, max int) string {
 	return text[:max] + "...(truncated)"
 }
 
-func limitToolResultForLLM(text string, max int) string {
+func limitToolResultForLLM(toolName string, text string) string {
+	max := 20000
+	if toolName == "answer_city_data_question" {
+		max = 120000
+	}
 	if len(text) <= max {
 		return text
 	}

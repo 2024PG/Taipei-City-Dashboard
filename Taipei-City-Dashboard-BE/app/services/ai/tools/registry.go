@@ -123,7 +123,7 @@ func QueryCityDataTool(ctx context.Context, args string) (string, error) {
 
 	targetIndex := params.Index
 	componentName := ""
-	if active := services.ComponentContextToPreferredResult(params.ComponentContext); active != nil {
+	if active := services.ComponentContextToRelevantActiveResult(params.Query, params.ComponentContext); active != nil {
 		if targetIndex == "" {
 			targetIndex = active.Index
 		}
@@ -181,6 +181,7 @@ func AnswerCityDataQuestionTool(ctx context.Context, args string) (string, error
 		TopK             int                    `json:"top_k"`
 		ScoreThreshold   float32                `json:"score_threshold"`
 		ComponentContext map[string]interface{} `json:"component_context"`
+		ComponentIndexes []string               `json:"component_indexes"`
 	}
 	if err := parseArgs(args, &params); err != nil {
 		return "", fmt.Errorf("參數解析失敗: %v", err)
@@ -196,8 +197,9 @@ func AnswerCityDataQuestionTool(ctx context.Context, args string) (string, error
 		TimeTo:              params.TimeTo,
 		TopK:                params.TopK,
 		ScoreThreshold:      params.ScoreThreshold,
-		PreferredComponent:  services.ComponentContextToPreferredResult(params.ComponentContext),
+		PreferredComponent:  services.ComponentContextToRelevantActiveResult(params.UserQuestion, params.ComponentContext),
 		PreferredComponents: services.ComponentContextToPreferredResults(params.UserQuestion, params.ComponentContext),
+		ForcedIndexes:       params.ComponentIndexes,
 	})
 	if err != nil {
 		return "", err

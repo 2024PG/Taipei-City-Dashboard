@@ -253,6 +253,42 @@ func TestBuildComponentEvidencePackKeepsMetrotaipei(t *testing.T) {
 	}
 }
 
+func TestComponentContextToRelevantActiveResultIgnoresUnrelatedActiveComponent(t *testing.T) {
+	result := ComponentContextToRelevantActiveResult("哪一區老屋最多", map[string]interface{}{
+		"dashboard": map[string]interface{}{"name": "電力重生了"},
+		"active_component": map[string]interface{}{
+			"id":    2,
+			"index": "power_usage",
+			"name":  "用電(度)量",
+			"city":  "taipei",
+		},
+	})
+	if result != nil {
+		t.Fatalf("active component = %#v, want nil for unrelated question", result)
+	}
+}
+
+func TestComponentContextToRelevantActiveResultKeepsExplicitCurrentComponent(t *testing.T) {
+	result := ComponentContextToRelevantActiveResult("目前組件 2025年9月電力用多少度", map[string]interface{}{
+		"dashboard": map[string]interface{}{"name": "電力重生了"},
+		"active_component": map[string]interface{}{
+			"id":    2,
+			"index": "power_usage",
+			"name":  "用電(度)量",
+			"city":  "taipei",
+		},
+	})
+	if result == nil {
+		t.Fatal("expected active component for explicit current-component question")
+	}
+	if result.Index != "power_usage" {
+		t.Fatalf("active index = %q, want power_usage", result.Index)
+	}
+	if result.Score <= 1 {
+		t.Fatalf("active score = %.2f, want boosted relevance score", result.Score)
+	}
+}
+
 func stubEvidenceDependencies(
 	search func(context.Context, string, int, float32) ([]ComponentResult, error),
 	fetch func(string, string, string, string) (ComponentChartDataResult, error),
